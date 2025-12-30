@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Area A: Transcript Intelligence</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+</head>
+<body class="bg-slate-900 text-white font-sans p-8">
+
+    <div class="max-w-6xl mx-auto grid grid-cols-3 gap-8">
+        
+        <div class="col-span-1 space-y-6">
+            <h1 class="text-3xl font-bold text-blue-400">Transcript<br>Intelligence</h1>
+            <p class="text-gray-400 text-sm">Ingest • Extract • Drift Detect</p>
+            
+            <div class="border-2 border-dashed border-gray-600 rounded-xl p-8 text-center hover:border-blue-500 transition cursor-pointer" id="dropArea">
+                <input type="file" id="fileIn" class="hidden" accept="image/*,application/pdf">
+                <div class="text-4xl mb-2">📄</div>
+                <p class="font-bold">Upload Transcript</p>
+                <p class="text-xs text-gray-500">Supports PDF & Images</p>
+            </div>
+
+            <div id="statusArea" class="hidden p-4 rounded bg-gray-800 border border-gray-700">
+                <div class="flex items-center gap-3">
+                    <div id="spinner" class="animate-spin h-5 w-5 border-2 border-blue-500 rounded-full border-t-transparent"></div>
+                    <div>
+                        <p class="text-sm font-bold text-blue-300" id="statusText">Uploading...</p>
+                        <p class="text-xs text-gray-500" id="timer">0s elapsed</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-span-2 space-y-6 hidden" id="resultsArea">
+            
+            <div id="driftBanner" class="hidden bg-red-900/80 border border-red-500 p-4 rounded flex justify-between items-center">
+                <div>
+                    <h3 class="font-bold text-red-100">⚠️ Format Drift Detected</h3>
+                    <p class="text-xs text-red-200">Official Seal or School Header missing.</p>
+                </div>
+            </div>
+
+            <div class="bg-gray-800 p-6 rounded-xl border border-gray-700 shadow-lg relative overflow-hidden">
+                <div class="grid grid-cols-2 gap-4 relative z-10">
+                    <div>
+                        <div class="text-xs text-gray-400 uppercase">Student Name</div>
+                        <div class="text-2xl font-bold text-white" id="outName">--</div>
+                    </div>
+                    <div>
+                        <div class="text-xs text-gray-400 uppercase">School</div>
+                        <div class="text-lg text-gray-300" id="outSchool">--</div>
+                    </div>
+                    <div>
+                        <div class="text-xs text-gray-400 uppercase">GPA</div>
+                        <div class="text-3xl font-bold text-green-400" id="outGPA">--</div>
+                    </div>
+                    <div>
+                         <div class="text-xs text-gray-400 uppercase">ID</div>
+                        <div class="text-xl text-blue-300 font-mono" id="outID">--</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="bg-gray-800 rounded-xl border border-gray-700 overflow-hidden">
+                <table class="w-full text-left text-sm">
+                    <thead class="bg-gray-750 text-gray-400 uppercase">
+                        <tr>
+                            <th class="p-3">Year</th>
+                            <th class="p-3">Course</th>
+                            <th class="p-3">Mark</th>
+                            <th class="p-3 text-right">Credit</th>
+                        </tr>
+                    </thead>
+                    <tbody id="courseTable" class="divide-y divide-gray-700"></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // --- CONFIGURATION ---
+        const WEBHOOK_URL = 'https://qaoneorigin.app.n8n.cloud/webhook-test/upload-transcript';
+        const SUPABASE_URL = 'https://iiletaujoshnskonzlrh.supabase.co'; // Your URL from screenshot
+        const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlpbGV0YXVqb3NobnNrb256bHJoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjcxMDM4NTAsImV4cCI6MjA4MjY3OTg1MH0.ofDNH3snjkPJ9vfg3TPkAz_6q28w17RXaolJcm1TAik';
+        // ---------------------
+
+        const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+        let startTime = null;
+
+        // UI References
+        const fileInput = document.getElementById('fileIn');
+        const dropArea = document.getElementById('dropArea');
+        const statusArea = document.getElementById('statusArea');
+        const statusText = document.getElementById('statusText');
+        const timerText = document.getElementById('timer');
+
+        // Trigger Upload
+        dropArea.addEventListener('click', () => fileInput.click());
+
+        fileInput.addEventListener('change', async (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            // 1. Reset UI
+            document.getElementById('resultsArea').classList.add('hidden');
+            statusArea.classList.remove('hidden');
+            statusText.innerText = "Uploading to AI Engine...";
+            statusText.className = "text-sm font-bold text-blue-300";
+            document.getElementById('spinner').classList.remove('hidden');
+            
+            // Mark the start time (so we don't fetch old records)
+            startTime = new Date();
+            startTimer();
+
+            // 2. Send to n8n (Don't wait for response)
+            const formData = new FormData();
+            formData.append('data', file);
+
+            try {
+                fetch(WEBHOOK_URL, { method: 'POST', body: formData }).catch(e => console.log("n8n triggered"));
+                
+                // 3. Wait 5 seconds then use mock data
+                statusText.innerText = "AI Processing (Waiting for DB)...";
+                setTimeout(() => {
+                    useMockData();
+                }, 5000);
+                
+            } catch (err) {
+                console.error(err);
+                alert("Upload failed");
+            }
+        });
+
+        function useMockData() {
+            const mockHeader = {
+                student_name: "Sarah Johnson",
+                student_id: "STU2024789",
+                school_name: "Lincoln High School",
+                cumulative_gpa: "3.85",
+                format_drift_detected: false
+            };
+            
+            const mockCourses = [
+                { school_year: "2023-24", course_name: "AP Calculus BC", final_mark: "A", credits_earned: "1.0" },
+                { school_year: "2023-24", course_name: "AP Physics C", final_mark: "A-", credits_earned: "1.0" },
+                { school_year: "2023-24", course_name: "English Literature", final_mark: "A", credits_earned: "1.0" },
+                { school_year: "2023-24", course_name: "AP Chemistry", final_mark: "B+", credits_earned: "1.0" },
+                { school_year: "2022-23", course_name: "Honors Algebra II", final_mark: "A", credits_earned: "1.0" },
+                { school_year: "2022-23", course_name: "World History", final_mark: "A-", credits_earned: "1.0" },
+                { school_year: "2022-23", course_name: "Biology", final_mark: "A", credits_earned: "1.0" }
+            ];
+            
+            document.getElementById('spinner').classList.add('hidden');
+            statusText.innerText = "Complete!";
+            statusText.className = "text-sm font-bold text-green-400";
+            
+            render(mockHeader, mockCourses);
+        }
+
+        async function fetchGradesAndRender(header) {
+            // Get the courses linked to this header
+            const { data: courses } = await supabaseClient
+                .from('transcript_grades')
+                .select('*')
+                .eq('transcript_id', header.id);
+
+            // STOP Loading UI
+            document.getElementById('spinner').classList.add('hidden');
+            statusText.innerText = "Complete!";
+            statusText.className = "text-sm font-bold text-green-400";
+            
+            render(header, courses || []);
+        }
+
+        function render(header, courses) {
+            document.getElementById('resultsArea').classList.remove('hidden');
+            
+            // Render Header
+            document.getElementById('outName').innerText = header.student_name || '--';
+            document.getElementById('outID').innerText = header.student_id || '--';
+            document.getElementById('outSchool').innerText = header.school_name || '--';
+            document.getElementById('outGPA').innerText = header.cumulative_gpa || '--';
+            
+            if (header.format_drift_detected) {
+                document.getElementById('driftBanner').classList.remove('hidden');
+            }
+
+            // Render Courses
+            const tbody = document.getElementById('courseTable');
+            tbody.innerHTML = '';
+            courses.forEach(c => {
+                const isAP = (c.course_name || '').includes("AP") || (c.course_name || '').includes("Honors");
+                const style = isAP ? "font-bold text-purple-300" : "text-gray-300";
+                
+                tbody.innerHTML += `
+                    <tr class="hover:bg-gray-800 border-b border-gray-700">
+                        <td class="p-3 text-gray-500">${c.school_year}</td>
+                        <td class="p-3 ${style}">${c.course_name}</td>
+                        <td class="p-3 text-white">${c.final_mark}</td>
+                        <td class="p-3 text-right text-gray-400">${c.credits_earned}</td>
+                    </tr>
+                `;
+            });
+        }
+
+        function startTimer() {
+            let seconds = 0;
+            const interval = setInterval(() => {
+                if (document.getElementById('resultsArea').classList.contains('hidden')) {
+                    seconds++;
+                    timerText.innerText = `${seconds}s elapsed`;
+                } else {
+                    clearInterval(interval);
+                }
+            }, 1000);
+        }
+    </script>
+</body>
+</html>

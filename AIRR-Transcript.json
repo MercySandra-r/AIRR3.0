@@ -1,0 +1,197 @@
+{
+  "name": "AIRR-Transcript",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "upload-transcript",
+        "options": {
+          "binaryPropertyName": "data"
+        }
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        0,
+        0
+      ],
+      "id": "6e7aeffb-de1d-403c-9f9f-9ed9f015ffdc",
+      "name": "Webhook",
+      "webhookId": "b3fe0d73-2735-4d0f-86ce-0ba0b4b5db7e"
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "models/gemini-2.5-flash-lite-preview-09-2025",
+          "mode": "list",
+          "cachedResultName": "models/gemini-2.5-flash-lite-preview-09-2025"
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "You are a transcript extraction engine. Analyze the attached image. Extract the following data into a strict JSON object:\n\nStudent Name\n\nStudent ID\n\nSchool Name\n\nCumulative GPA (as a number)\n\nA list of courses (Year, Course Name, Grade, Credit).\n\nDetect if the 'Official Seal' or School Header is missing. If so, set 'drift_detected' to true.\n\nRETURN ONLY JSON. Do not include markdown formatting like ```json."
+            }
+          ]
+        },
+        "builtInTools": {},
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.googleGemini",
+      "typeVersion": 1.1,
+      "position": [
+        144,
+        96
+      ],
+      "id": "9f12d8b8-5696-4dfd-b6e4-50933c3de809",
+      "name": "Message a model",
+      "credentials": {
+        "googlePalmApi": {
+          "id": "1pkyvgmkMGKM9d4e",
+          "name": "Google Gemini(PaLM) Api account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// 1. GET THE RAW TEXT\n// Your screenshot shows the data is nested deep inside content -> parts -> 0 -> text\nconst item = items[0].json;\nlet aiText = \"\";\n\nif (item.content && item.content.parts && item.content.parts[0]) {\n    aiText = item.content.parts[0].text;\n} else if (item.text) {\n    aiText = item.text;\n} else if (typeof item === 'string') {\n    aiText = item;\n} else {\n    // If we can't find it, stringify the whole thing to search (fallback)\n    aiText = JSON.stringify(item);\n}\n\n// 2. CLEAN UP MARKDOWN (Remove ```json ... ``` wrappers)\nconst cleanJson = aiText\n    .replace(/```json/g, '')\n    .replace(/```/g, '')\n    .trim();\n\n// 3. PARSE & MAP TO SUPABASE COLUMNS\ntry {\n    // Find the first '{' and last '}' to ensure we have valid JSON boundaries\n    const firstBrace = cleanJson.indexOf('{');\n    const lastBrace = cleanJson.lastIndexOf('}');\n    const jsonString = cleanJson.substring(firstBrace, lastBrace + 1);\n    \n    const parsed = JSON.parse(jsonString);\n    \n    // Handle if the AI put the header inside a \"header\" property\n    const data = parsed.header || parsed;\n\n    // 4. FORCE KEY MAPPING (Title Case -> snake_case)\n    // The AI returned \"Student Name\", but Supabase needs \"student_name\"\n    return {\n        json: {\n            student_name: data[\"Student Name\"] || data[\"student_name\"],\n            student_id: data[\"Student ID\"] || data[\"student_id\"],\n            school_name: data[\"School Name\"] || data[\"school_name\"],\n            cumulative_gpa: data[\"Cumulative GPA\"] || data[\"cumulative_gpa\"],\n            // Check drift: If AI didn't return it, assume false\n            format_drift_detected: data.drift_check || false\n        }\n    };\n\n} catch (error) {\n    // Stop the workflow with a clear error if parsing fails\n    throw new Error(\"Parsing Failed. Here is the text I tried to parse: \" + aiText);\n}"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        400,
+        240
+      ],
+      "id": "5f0fc309-02bd-4af7-8e69-cbcf9ad6870a",
+      "name": "Code in JavaScript"
+    },
+    {
+      "parameters": {
+        "tableId": "transcript_header",
+        "dataToSend": "autoMapInputData"
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        512,
+        32
+      ],
+      "id": "656ebf01-66dd-4d7d-bc0a-b6a8a0259d2c",
+      "name": "Create a row",
+      "credentials": {
+        "supabaseApi": {
+          "id": "riom9Q6yPqTdLPgi",
+          "name": "Supabase account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "tableId": "transcript_grades",
+        "dataToSend": "autoMapInputData",
+        "inputsToIgnore": "=created_at, cumulative_gpa,format_drift_detected, school_name,  transcript_grades, dob, drift_reason, student_id, student_name"
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        768,
+        32
+      ],
+      "id": "eff575e9-a7b4-460d-8c75-a583daed1a83",
+      "name": "Create a row1",
+      "credentials": {
+        "supabaseApi": {
+          "id": "riom9Q6yPqTdLPgi",
+          "name": "Supabase account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// 1. Get the NEW Transcript ID (from the Supabase node just before this)\nconst newHeaderId = items[0].json.id;\n\n// 2. LOOK BACK AT THE AI MODEL (The Source of Truth)\n// We reference \"Message a model\" because it contains the raw courses list.\nconst aiNode = $('Message a model').first().json;\n\n// 3. EXTRACT RAW TEXT (Same logic as Node 1)\nlet aiText = \"\";\nif (aiNode.content && aiNode.content.parts && aiNode.content.parts[0]) {\n    aiText = aiNode.content.parts[0].text;\n} else if (aiNode.text) {\n    aiText = aiNode.text;\n} else if (typeof aiNode === 'string') {\n    aiText = aiNode;\n} else {\n    aiText = JSON.stringify(aiNode);\n}\n\n// 4. CLEAN & PARSE (Same logic as Node 1)\nconst cleanJson = aiText.replace(/```json/g, '').replace(/```/g, '').trim();\nconst firstBrace = cleanJson.indexOf('{');\nconst lastBrace = cleanJson.lastIndexOf('}');\nconst jsonString = cleanJson.substring(firstBrace, lastBrace + 1);\n\nlet courses = [];\ntry {\n    const parsedData = JSON.parse(jsonString);\n    // The courses are usually at the root: { header: {...}, courses: [...] }\n    courses = parsedData.courses || [];\n} catch (e) {\n    throw new Error(\"Could not parse courses from AI text\");\n}\n\n// 5. MAP THE COURSES & ATTACH THE TRANSCRIPT ID\nreturn courses.map(c => ({\n    json: {\n        transcript_id: newHeaderId,\n        school_year: c.year || c.Year || c.school_year,\n        course_name: c.course_name || c.course || c.Course || c[\"Course Name\"],\n        final_mark: c.grade || c.mark || c.final_mark || c.Grade,\n        credits_earned: c.credit || c.credits || c.Credit || 0\n    }\n}));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        752,
+        304
+      ],
+      "id": "a556b35d-dcec-4b4f-bc46-5fb9977abcdc",
+      "name": "Code in JavaScript1"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Message a model",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Message a model": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript1",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "Create a row",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create a row": {
+      "main": [
+        [
+          {
+            "node": "Create a row1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript1": {
+      "main": [
+        [
+          {
+            "node": "Create a row1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "availableInMCP": false
+  },
+  "versionId": "c234c846-5436-4164-aaab-c775df5287cc",
+  "meta": {
+    "instanceId": "50013a89d69cbab2ac887b6fac976b89a79d15f8c04d1819c7ef746ff6364a42"
+  },
+  "id": "lG48BUsLC59GHqCx",
+  "tags": []
+}
